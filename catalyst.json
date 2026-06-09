@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "project": {
+    "id": "49839000000017001",
+    "name": "KSP-Crime-Analytics",
+    "type": "live",
+    "domain": "ksp-crime-analytics-60073657069.development"
+  },
+  "functions": [
+    {
+      "type": "advanced-io",
+      "name": "crime_api",
+      "handler": "index.js",
+      "path": "/api/v1",
+      "runtime": "Node.js",
+      "memory": 256,
+      "timeout": 30
+    }
+  ],
+  "slate": []
+}

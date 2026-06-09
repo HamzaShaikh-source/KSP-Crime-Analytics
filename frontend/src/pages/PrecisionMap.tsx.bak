@@ -1,0 +1,440 @@
+import { useEffect, useRef, useState } from 'react'
+import maplibregl from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { crimeIncidents, CrimeIncident, policeStations, policeBeats } from '../data/policeData'
+
+// Crime type colors for map markers
+const crimeColors: Record<string, string> = {
+  'Robbery': '#ef4444',
+  'Burglary': '#f97316',
+  'Theft': '#eab308',
+  'Chain Snatching': '#a855f7',
+  'Assault': '#3b82f6',
+  'Murder': '#dc2626',
+  'Cyber Crime': '#06b6d4',
+  'Vehicle Theft': '#ec4899',
+  'Riot': '#f43f5e',
+  'Drug Offense': '#84cc16',
+  'POCSO': '#e11d48',
+  'SC/ST Atrocity': '#8b5cf6',
+}
+
+export default function PrecisionMap() {
+  const mapContainer = useRef<HTMLDivElement>(null)
+  const map = useRef<maplibregl.Map | null>(null)
+  const [selectedIncident, setSelectedIncident] = useState<CrimeIncident | null>(null)
+  const [filterType, setFilterType] = useState<string>('all')
+  const [filterDate, setFilterDate] = useState<string>('all')
+  const [showHeatmap, setShowHeatmap] = useState(true)
+  const [showIncidents, setShowIncidents] = useState(true)
+
+  useEffect(() => {
+    if (map.current || !mapContainer.current) return
+
+    const m = new maplibregl.Map({
+      container: mapContainer.current,
+      style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+      center: [76.5, 14.5],
+      zoom: 6.5,
+    })
+
+    m.addControl(new maplibregl.NavigationControl(), 'top-right')
+
+    m.on('load', () => {
+      // Add heatmap layer
+      const heatFeatures: any[] = crimeIncidents.map(c => ({
+        type: 'Feature',
+        properties: { ...c },
+        geometry: { type: 'Point', coordinates: [c.address.lng, c.address.lat] },
+      }))
+
+      m.addSource('incidents', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: heatFeatures },
+        cluster: true,
+        clusterMaxZoom: 14,
+        clusterRadius: 50,
+      })
+
+      // Cluster circles
+      m.addLayer({
+        id: 'clusters',
+        type: 'circle',
+        source: 'incidents',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': ['step', ['get', 'point_count'], '#3b82f6', 3, '#f97316', 6, '#ef4444'],
+          'circle-radius': ['step', ['get', 'point_count'], 20, 3, 30, 6, 40],
+          'circle-opacity': 0.7,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#fff',
+        },
+      })
+
+      // Cluster count labels
+      m.addLayer({
+        id: 'cluster-count',
+        type: 'symbol',
+        source: 'incidents',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': ['get', 'point_count_abbreviated'],
+          'text-font': ['Open Sans Bold'],
+          'text-size': 14,
+        },
+        paint: {
+          'text-color': '#fff',
+        },
+      })
+
+      // Individual incident points (unclustered)
+      m.addLayer({
+        id: 'incident-points',
+        type: 'circle',
+        source: 'incidents',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+          'circle-radius': 8,
+          'circle-color': ['match', ['get', 'crimeType'],
+            'Robbery', '#ef4444', 'Burglary', '#f97316', 'Theft', '#eab308',
+            'Chain Snatching', '#a855f7', 'Murder', '#dc2626', 'Vehicle Theft', '#ec4899',
+            '#3b82f6'],
+          'circle-opacity': 0.9,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#fff',
+        },
+      })
+
+      // Incident labels
+      m.addLayer({
+        id: 'incident-labels',
+        type: 'symbol',
+        source: 'incidents',
+        filter: ['!', ['has', 'point_count']],
+        layout: {
+          'text-field': ['get', 'crimeType'],
+          'text-offset': [0, -1.5],
+          'text-size': 10,
+          'text-font': ['Open Sans Bold'],
+        },
+        paint: {
+          'text-color': '#e2e8f0',
+          'text-halo-color': '#0a0e17',
+          'text-halo-width': 2,
+        },
+      })
+
+      // Click handler - incident points
+      m.on('click', 'incident-points', (e) => {
+        if (!e.features?.[0]) return
+        const props = e.features[0].properties
+        if (!props) return
+        const incident = crimeIncidents.find(c => c.id === props.id)
+        if (incident) {
+          setSelectedIncident(incident)
+          const coords = (e.features[0].geometry as any).coordinates
+
+          // Draw radius circle for nearby cases
+          if (m.getLayer('proximity-circle')) m.removeLayer('proximity-circle')
+          if (m.getSource('proximity')) m.removeSource('proximity')
+          
+          m.addSource('proximity', {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'Point',
+                coordinates: coords,
+              },
+            },
+          })
+          m.addLayer({
+            id: 'proximity-circle',
+            type: 'circle',
+            source: 'proximity',
+            paint: {
+              'circle-radius': 40,
+              'circle-color': 'rgba(59, 130, 246, 0.1)',
+              'circle-stroke-width': 2,
+              'circle-stroke-color': 'rgba(59, 130, 246, 0.4)',
+              'circle-stroke-dasharray': [2, 2],
+            },
+          })
+
+          // Popup
+          new maplibregl.Popup({ offset: 25, maxWidth: '340px' })
+            .setLngLat(coords)
+            .setHTML(`
+              <div style="font-family:Inter,sans-serif;background:#1a1f2e;color:#e2e8f0;padding:0;border-radius:8px;overflow:hidden">
+                <div style="padding:10px 12px;background:${crimeColors[incident.crimeType] || '#3b82f6'};color:#fff">
+                  <div style="font-size:11px;font-weight:600">${incident.firNumber}</div>
+                  <div style="font-size:16px;font-weight:700;margin-top:2px">${incident.crimeType}</div>
+                </div>
+                <div style="padding:10px 12px;font-size:12px;line-height:1.6">
+                  <div>📍 <b>${incident.address.houseNumber}, ${incident.address.street}</b></div>
+                  <div>🏘️ ${incident.address.area}, ${incident.address.district}</div>
+                  <div>🕐 ${new Date(incident.dateTime).toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  <div>👤 Victim: ${incident.victim.name}, Age ${incident.victim.age}</div>
+                  <div>💰 Loss: ₹${incident.victim.lossAmount.toLocaleString()}</div>
+                  <div style="margin-top:6px;padding-top:6px;border-top:1px solid #2a3040">
+                    <div style="display:flex;justify-content:space-between">
+                      <span>Status: <b style="color:${incident.status === 'Solved' ? '#22c55e' : incident.status === 'Under Investigation' ? '#eab308' : '#3b82f6'}">${incident.status}</b></span>
+                      <span>Case: <b>${incident.id}</b></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            `)
+            .addTo(m)
+        }
+      })
+
+      // Police stations layer
+      const stationFeatures = policeStations.map(s => ({
+        type: 'Feature',
+        properties: { name: s.name, contact: s.contactNumber, officer: s.officerInCharge },
+        geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+      }))
+
+      m.addSource('stations', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: stationFeatures },
+      })
+
+      m.addLayer({
+        id: 'stations-layer',
+        type: 'symbol',
+        source: 'stations',
+        layout: {
+          'icon-image': 'police-station',
+          'icon-size': 1.2,
+          'text-field': ['get', 'name'],
+          'text-offset': [0, -1.8],
+          'text-size': 10,
+        },
+        paint: {
+          'text-color': '#94a3b8',
+          'text-halo-color': '#0a0e17',
+          'text-halo-width': 1.5,
+        },
+      })
+
+      // Click handlers
+      m.on('mouseenter', 'incident-points', () => { m.getCanvas().style.cursor = 'pointer' })
+      m.on('mouseleave', 'incident-points', () => { m.getCanvas().style.cursor = '' })
+
+      map.current = m
+    })
+
+    return () => { m.remove(); map.current = null }
+  }, [])
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Precision Crime Map</h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>House-level crime incident mapping with proximity analysis</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <select value={filterType} onChange={e => setFilterType(e.target.value)}
+            style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', padding: '0.35rem 0.75rem', borderRadius: '0.375rem', fontSize: '0.8rem' }}>
+            <option value="all">All Crime Types</option>
+            <option value="Robbery">Robbery</option>
+            <option value="Burglary">Burglary</option>
+            <option value="Chain Snatching">Chain Snatching</option>
+            <option value="Vehicle Theft">Vehicle Theft</option>
+            <option value="Murder">Murder</option>
+          </select>
+          <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <input type="checkbox" checked={showHeatmap} onChange={e => setShowHeatmap(e.target.checked)} /> Heat
+          </label>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div ref={mapContainer} className="map-container" style={{ height: '600px', borderRadius: 0 }} />
+      </div>
+
+      {/* Bottom panel — selected incident detail */}
+      {selectedIncident && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                <span style={{
+                  padding: '0.25rem 0.6rem',
+                  borderRadius: '0.25rem',
+                  fontSize: '0.7rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  background: `${crimeColors[selectedIncident.crimeType]}22`,
+                  color: crimeColors[selectedIncident.crimeType],
+                }}>{selectedIncident.crimeType}</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{selectedIncident.firNumber}</span>
+                <span style={{
+                  fontSize: '0.7rem',
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: '0.25rem',
+                  fontWeight: 600,
+                  background: selectedIncident.status === 'Solved' ? 'rgba(34,197,94,0.2)' : selectedIncident.status === 'Under Investigation' ? 'rgba(234,179,8,0.2)' : 'rgba(59,130,246,0.2)',
+                  color: selectedIncident.status === 'Solved' ? 'var(--accent-green)' : selectedIncident.status === 'Under Investigation' ? 'var(--accent-yellow)' : 'var(--accent-blue)',
+                }}>{selectedIncident.status}</span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', fontSize: '0.8rem' }}>
+                {/* Location Details */}
+                <div>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-cyan)' }}>📍 Location</h3>
+                  <p><b>House:</b> {selectedIncident.address.houseNumber}, {selectedIncident.address.street}</p>
+                  <p><b>Area:</b> {selectedIncident.address.area}</p>
+                  <p><b>Landmark:</b> {selectedIncident.address.landmark}</p>
+                  <p><b>District:</b> {selectedIncident.address.district}</p>
+                  <p><b>Police Station:</b> {selectedIncident.address.policeStation}</p>
+                  <p><b>Beat:</b> {selectedIncident.address.beat}</p>
+                  <p><b>Coordinates:</b> {selectedIncident.address.lat.toFixed(4)}, {selectedIncident.address.lng.toFixed(4)}</p>
+                </div>
+
+                {/* Victim & FIR Details */}
+                <div>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-yellow)' }}>👤 Victim & FIR</h3>
+                  <p><b>Name:</b> {selectedIncident.victim.name} (Age {selectedIncident.victim.age})</p>
+                  <p><b>Contact:</b> {selectedIncident.victim.contact}</p>
+                  <p><b>Loss Amount:</b> ₹{selectedIncident.victim.lossAmount.toLocaleString()}</p>
+                  <p><b>Injuries:</b> {selectedIncident.victim.injuries}</p>
+                  <p><b>Registered By:</b> {selectedIncident.firDetails.registeredBy}</p>
+                  <p><b>Sections:</b> {selectedIncident.firDetails.sectionsApplied.join(', ')}</p>
+                  <p><b>Time Slot:</b> {selectedIncident.timeSlot} | <b>Day:</b> {selectedIncident.dayOfWeek}</p>
+                </div>
+
+                {/* Accused Details */}
+                <div>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-red)' }}>🔍 Accused / Suspects</h3>
+                  {selectedIncident.accused.length > 0 ? selectedIncident.accused.map(a => (
+                    <div key={a.id} style={{
+                      padding: '0.5rem',
+                      background: 'rgba(0,0,0,0.2)',
+                      borderRadius: '0.375rem',
+                      marginBottom: '0.5rem',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <b>{a.name}</b>
+                        <span style={{
+                          fontSize: '0.65rem',
+                          fontWeight: 700,
+                          padding: '0.15rem 0.4rem',
+                          borderRadius: '0.25rem',
+                          background: a.isRepeatOffender ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)',
+                          color: a.isRepeatOffender ? 'var(--accent-red)' : 'var(--accent-green)',
+                        }}>{a.isRepeatOffender ? 'REPEAT' : 'FIRST'}</span>
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                        <div>Risk Score: <b style={{ color: a.riskScore > 80 ? 'var(--accent-red)' : 'var(--accent-yellow)' }}>{a.riskScore}/100</b></div>
+                        <div>Mo: {a.modusOperandi.substring(0, 60)}...</div>
+                        <div>History: {a.criminalHistory.length} prior cases</div>
+                      </div>
+                    </div>
+                  )) : <p style={{ color: 'var(--text-secondary)' }}>No suspects identified yet</p>}
+                </div>
+              </div>
+
+              {/* FIR Description */}
+              <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', borderRadius: '0.5rem' }}>
+                <h3 style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-purple)', marginBottom: '0.25rem' }}>📋 FIR Description</h3>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{selectedIncident.firDetails.description}</p>
+              </div>
+
+              {/* Nearby Cases */}
+              {selectedIncident.nearbyCases.length > 0 && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-blue)' }}>
+                    🔗 Nearby Similar Cases (within 2km)
+                  </h3>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {selectedIncident.nearbyCases.map(nc => {
+                      const caseData = crimeIncidents.find(c => c.id === nc.caseId)
+                      return (
+                        <div key={nc.caseId} style={{
+                          padding: '0.5rem 0.75rem',
+                          background: 'rgba(0,0,0,0.2)',
+                          borderRadius: '0.375rem',
+                          border: '1px solid var(--border-color)',
+                          fontSize: '0.75rem',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => {
+                          const found = crimeIncidents.find(c => c.id === nc.caseId)
+                          if (found) setSelectedIncident(found)
+                        }}>
+                          <div style={{ fontWeight: 600 }}>{nc.crimeType}</div>
+                          <div style={{ color: 'var(--text-secondary)' }}>{nc.caseId}</div>
+                          <div style={{ color: 'var(--accent-cyan)' }}>{nc.distance}km away</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* AI Case Linkage */}
+              {selectedIncident.linkedCases.length > 0 && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--accent-purple)' }}>
+                    🧠 AI Suggests — Potential Linked Cases ({selectedIncident.similarityScore}% Similarity)
+                  </h3>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {selectedIncident.linkedCases.map(lc => {
+                      const caseData = crimeIncidents.find(c => c.id === lc)
+                      return (
+                        <div key={lc} style={{
+                          padding: '0.5rem 0.75rem',
+                          background: 'rgba(168,85,247,0.1)',
+                          borderRadius: '0.375rem',
+                          border: '1px solid rgba(168,85,247,0.3)',
+                          fontSize: '0.75rem',
+                        }}>
+                          <div style={{ fontWeight: 600 }}>{caseData?.crimeType || 'Unknown'}</div>
+                          <div style={{ color: 'var(--text-secondary)' }}>{lc}</div>
+                          <div style={{ color: 'var(--accent-purple)' }}>{caseData?.address.district}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Close button */}
+            <button onClick={() => setSelectedIncident(null)} style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: '1.2rem',
+              padding: '0.25rem',
+            }}>✕</button>
+          </div>
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            {Object.entries(crimeColors).map(([type, color]) => (
+              <div key={type} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.7rem' }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block' }} />
+                <span style={{ color: 'var(--text-secondary)' }}>{type}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            <span style={{ display: 'inline-block', width: 40, height: 2, borderTop: '2px dashed rgba(59,130,246,0.4)', marginRight: '0.25rem' }} />
+            Proximity Radius (2km)
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
