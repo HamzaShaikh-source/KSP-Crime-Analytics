@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import SuspectTracker from './pages/SuspectTracker'
 import PrecisionMap from './pages/PrecisionMap'
 import CommandCenter from './pages/CommandCenter'
 import CrimeMap from './pages/CrimeMap'
@@ -7,12 +8,13 @@ import CriminalNetwork from './pages/CriminalNetwork'
 import PredictiveIntelligence from './pages/PredictiveIntelligence'
 import AlertsReports from './pages/AlertsReports'
 
-type Page = 'command' | 'precision' | 'map' | 'districts' | 'network' | 'predictive' | 'alerts'
+type Page = 'command' | 'precision' | 'suspects' | 'map' | 'districts' | 'network' | 'predictive' | 'alerts'
 
 const navItems: { id: Page; label: string; icon: string }[] = [
   { id: 'command', label: 'Command Center', icon: '📊' },
-  { id: 'precision', label: 'Precision Crime Map', icon: '📍' },
-  { id: 'map', label: 'Heatmap View', icon: '🗺️' },
+  { id: 'precision', label: 'Precision Map', icon: '📍' },
+  { id: 'suspects', label: 'Suspect Tracker', icon: '🔍' },
+  { id: 'map', label: 'Heatmap', icon: '🗺️' },
   { id: 'districts', label: 'District Deep-Dive', icon: '🏛️' },
   { id: 'network', label: 'Link Analysis', icon: '🔗' },
   { id: 'predictive', label: 'Predictive Intel', icon: '🔮' },
@@ -26,6 +28,7 @@ function App() {
     switch (currentPage) {
       case 'command': return <CommandCenter />
       case 'precision': return <PrecisionMap />
+      case 'suspects': return <SuspectTracker />
       case 'map': return <CrimeMap />
       case 'districts': return <DistrictDrilldown />
       case 'network': return <CriminalNetwork />

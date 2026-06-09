@@ -17,5 +17,10 @@
       "timeout": 30
     }
   ],
-  "slate": []
+  "slate": [
+    {
+      "name": "crime-dashboard",
+      "source": "/home/kali/Downloads/ksp-datathon/frontend/dist"
+    }
+  ]
 }
